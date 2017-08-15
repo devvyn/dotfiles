@@ -1,1 +1,1 @@
-set disablesites=mail.google.com, *.ipynb
+set disablesites=mail.google.com
