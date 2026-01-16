@@ -1,0 +1,4 @@
+#!/bin/bash
+# Quick Emacs launcher with Doom
+export PATH="$HOME/.config/emacs/bin:$PATH"
+emacs "$@"

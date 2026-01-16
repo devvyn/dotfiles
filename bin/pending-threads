@@ -1,0 +1,223 @@
+#!/bin/bash
+# Pending Threads - Show messages awaiting reply
+# Identifies messages without responses in conversation threads
+
+set -euo pipefail
+
+BRIDGE_ROOT="/Users/devvynmurphy/infrastructure/agent-bridge/bridge"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+print_color() {
+    local color=$1
+    shift
+    echo -e "${color}$*${NC}"
+}
+
+# Extract message metadata
+get_message_id() {
+    local file=$1
+    grep -m 1 '^\*\*Message-ID\*\*:' "$file" 2>/dev/null | sed 's/\*\*Message-ID\*\*:[[:space:]]*//' || echo ""
+}
+
+get_from() {
+    local file=$1
+    grep -m 1 '^\*\*From\*\*:' "$file" 2>/dev/null | sed 's/\*\*From\*\*:[[:space:]]*//' || echo "unknown"
+}
+
+get_to() {
+    local file=$1
+    grep -m 1 '^\*\*To\*\*:' "$file" 2>/dev/null | sed 's/\*\*To\*\*:[[:space:]]*//' || echo "unknown"
+}
+
+get_timestamp() {
+    local file=$1
+    grep -m 1 '^\*\*Timestamp\*\*:' "$file" 2>/dev/null | sed 's/\*\*Timestamp\*\*:[[:space:]]*//' || echo ""
+}
+
+get_title() {
+    local file=$1
+    head -n 1 "$file" | sed 's/^# \[PRIORITY: [A-Z]*\] //' | sed 's/^# //'
+}
+
+get_priority() {
+    local file=$1
+    head -n 1 "$file" | grep -o 'PRIORITY: [A-Z]*' | sed 's/PRIORITY: //' || echo "NORMAL"
+}
+
+# Check if message has replies
+has_replies() {
+    local msg_id=$1
+
+    # Search for messages with In-Reply-To pointing to this ID
+    local reply_count=$(find "$BRIDGE_ROOT" -type f -name "*.md" -exec grep -l "In-Reply-To.*$msg_id" {} \; 2>/dev/null | wc -l | tr -d ' ')
+
+    [ "$reply_count" -gt 0 ]
+}
+
+# Calculate age in hours
+get_age_hours() {
+    local timestamp=$1
+
+    # Parse ISO8601 timestamp
+    if command -v gdate >/dev/null 2>&1; then
+        # GNU date (via Homebrew coreutils)
+        local epoch=$(gdate -d "$timestamp" +%s 2>/dev/null || echo "0")
+    else
+        # BSD date (macOS default)
+        local epoch=$(date -j -f "%Y-%m-%dT%H:%M:%S" "${timestamp:0:19}" +%s 2>/dev/null || echo "0")
+    fi
+
+    local now=$(date +%s)
+    local age_seconds=$((now - epoch))
+    local age_hours=$((age_seconds / 3600))
+
+    echo "$age_hours"
+}
+
+# Colorize priority
+colorize_priority() {
+    local priority=$1
+    case "$priority" in
+        CRITICAL) print_color "$RED" "CRITICAL" ;;
+        HIGH)     print_color "$YELLOW" "HIGH    " ;;
+        NORMAL)   print_color "$GREEN" "NORMAL  " ;;
+        INFO)     print_color "$CYAN" "INFO    " ;;
+        *)        echo "$priority" ;;
+    esac
+}
+
+# Find pending messages
+find_pending_messages() {
+    local agent_filter=${1:-}
+
+    # Search all inboxes
+    local search_path="$BRIDGE_ROOT/inbox"
+    if [ -n "$agent_filter" ]; then
+        search_path="$BRIDGE_ROOT/inbox/$agent_filter"
+    fi
+
+    if [ ! -d "$search_path" ]; then
+        print_color "$RED" "Error: Path not found: $search_path"
+        return 1
+    fi
+
+    # Find all messages
+    find "$search_path" -type f -name "*.md" 2>/dev/null
+}
+
+# Main
+main() {
+    local agent_filter=${1:-}
+
+    print_color "$BOLD$BLUE" "╔════════════════════════════════════════════════════════════╗"
+    print_color "$BOLD$BLUE" "║           Pending Threads (Awaiting Reply)                 ║"
+    print_color "$BOLD$BLUE" "╚════════════════════════════════════════════════════════════╝"
+    echo ""
+
+    if [ -n "$agent_filter" ]; then
+        print_color "$CYAN" "Filtering for agent: $agent_filter"
+    else
+        print_color "$CYAN" "Showing all agents"
+    fi
+    echo ""
+
+    local pending_count=0
+    local messages=$(find_pending_messages "$agent_filter")
+
+    if [ -z "$messages" ]; then
+        print_color "$GREEN" "✓ No pending messages - all caught up!"
+        return 0
+    fi
+
+    # Process each message
+    echo "$messages" | while read -r file; do
+        if [ ! -f "$file" ]; then
+            continue
+        fi
+
+        local msg_id=$(get_message_id "$file")
+        local from=$(get_from "$file")
+        local to=$(get_to "$file")
+        local title=$(get_title "$file")
+        local priority=$(get_priority "$file")
+        local timestamp=$(get_timestamp "$file")
+        local age_hours=$(get_age_hours "$timestamp")
+
+        # Check if this message has replies
+        if has_replies "$msg_id"; then
+            # Has replies - not pending
+            continue
+        fi
+
+        # This is a pending message
+        pending_count=$((pending_count + 1))
+
+        # Truncate title if too long
+        if [ ${#title} -gt 45 ]; then
+            title="${title:0:42}..."
+        fi
+
+        # Display pending message
+        echo ""
+        printf "  "
+        colorize_priority "$priority"
+        printf " → %-10s " "$to"
+
+        # Age indicator
+        if [ "$age_hours" -gt 48 ]; then
+            print_color "$RED" "(${age_hours}h old)"
+        elif [ "$age_hours" -gt 24 ]; then
+            print_color "$YELLOW" "(${age_hours}h old)"
+        else
+            print_color "$CYAN" "(${age_hours}h old)"
+        fi
+
+        echo ""
+        printf "  From: %-10s Title: %s\n" "$from" "$title"
+        printf "  Message-ID: %s\n" "${msg_id:0:35}..."
+        printf "  File: %s\n" "$(basename "$file")"
+
+    done
+
+    echo ""
+    echo ""
+    print_color "$BOLD$YELLOW" "━━━ SUMMARY ━━━"
+    echo ""
+
+    if [ "$pending_count" -eq 0 ]; then
+        print_color "$GREEN" "✓ No unanswered messages"
+    else
+        print_color "$YELLOW" "⚠ $pending_count message(s) awaiting reply"
+        echo ""
+        print_color "$CYAN" "Quick actions:"
+        echo "  Reply to message:  ~/infrastructure/agent-bridge/workspace/scripts/reply-to.sh <message_id> <from_agent>"
+        echo "  View thread:       ~/infrastructure/agent-bridge/workspace/scripts/thread-view.sh <message_id>"
+    fi
+
+    echo ""
+}
+
+# Usage
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+    echo "Usage: $0 [agent_name]"
+    echo ""
+    echo "Show messages awaiting reply"
+    echo ""
+    echo "Arguments:"
+    echo "  agent_name  Optional: filter by agent inbox (code, chat, etc.)"
+    echo ""
+    echo "Examples:"
+    echo "  $0           # Show all pending messages"
+    echo "  $0 code      # Show pending messages for code agent only"
+    exit 0
+fi
+
+main "$@"

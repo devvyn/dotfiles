@@ -1,0 +1,215 @@
+#!/bin/bash
+# Bridge Status Dashboard - Quick visibility into bridge health
+# Shows queue depth, inbox state, recent activity
+
+set -euo pipefail
+
+BRIDGE_ROOT="/Users/devvynmurphy/infrastructure/agent-bridge/bridge"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+print_color() {
+    local color=$1
+    shift
+    echo -e "${color}$*${NC}"
+}
+
+# Get count of files in directory
+count_files() {
+    local dir=$1
+    if [ -d "$dir" ]; then
+        find "$dir" -type f -name "*.md" 2>/dev/null | wc -l | tr -d ' '
+    else
+        echo "0"
+    fi
+}
+
+# Get recent files with timestamps
+list_recent() {
+    local dir=$1
+    local limit=${2:-5}
+
+    if [ -d "$dir" ]; then
+        find "$dir" -type f -name "*.md" 2>/dev/null | \
+            xargs ls -lt 2>/dev/null | \
+            head -n "$limit" | \
+            awk '{print $9}' | \
+            xargs -I {} basename {}
+    fi
+}
+
+# Extract title from message file
+get_message_title() {
+    local file=$1
+    if [ -f "$file" ]; then
+        head -n 1 "$file" | sed 's/^# \[PRIORITY: [A-Z]*\] //' | sed 's/^# //'
+    else
+        echo "Unknown"
+    fi
+}
+
+# Get priority from message file
+get_message_priority() {
+    local file=$1
+    if [ -f "$file" ]; then
+        head -n 1 "$file" | grep -o 'PRIORITY: [A-Z]*' | sed 's/PRIORITY: //' || echo "NORMAL"
+    else
+        echo "NORMAL"
+    fi
+}
+
+# Colorize priority
+colorize_priority() {
+    local priority=$1
+    case "$priority" in
+        CRITICAL) print_color "$RED" "CRITICAL" ;;
+        HIGH)     print_color "$YELLOW" "HIGH    " ;;
+        NORMAL)   print_color "$GREEN" "NORMAL  " ;;
+        INFO)     print_color "$CYAN" "INFO    " ;;
+        *)        echo "$priority" ;;
+    esac
+}
+
+# Main dashboard
+main() {
+    print_color "$BOLD$BLUE" "╔════════════════════════════════════════════════════════════╗"
+    print_color "$BOLD$BLUE" "║           Bridge Status Dashboard                          ║"
+    print_color "$BOLD$BLUE" "╚════════════════════════════════════════════════════════════╝"
+    echo ""
+
+    # System time
+    print_color "$CYAN" "System Time: $(date)"
+    echo ""
+
+    # === Queue Status ===
+    print_color "$BOLD$YELLOW" "━━━ QUEUE STATUS ━━━"
+    echo ""
+
+    PENDING_COUNT=$(count_files "$BRIDGE_ROOT/queue/pending")
+    PROCESSING_COUNT=$(count_files "$BRIDGE_ROOT/queue/processing")
+    DEFERRED_COUNT=$(count_files "$BRIDGE_ROOT/queue/deferred")
+
+    printf "  %-20s %s\n" "Pending:" "$PENDING_COUNT"
+    printf "  %-20s %s\n" "Processing:" "$PROCESSING_COUNT"
+    printf "  %-20s %s\n" "Deferred:" "$DEFERRED_COUNT"
+    echo ""
+
+    # Warning for stuck processing
+    if [ "$PROCESSING_COUNT" -gt 0 ]; then
+        print_color "$YELLOW" "  ⚠ Warning: Messages in processing state"
+        print_color "$YELLOW" "    Check for stale locks if this persists"
+    fi
+
+    # === Inbox Status ===
+    print_color "$BOLD$YELLOW" "━━━ INBOX STATUS ━━━"
+    echo ""
+
+    # Get list of agents from registry or use default
+    if [ -f "$BRIDGE_ROOT/registry/agents.json" ]; then
+        AGENTS=$(jq -r '.active_agents | keys[]' "$BRIDGE_ROOT/registry/agents.json" 2>/dev/null || echo "code chat human investigator")
+    else
+        AGENTS="code chat human investigator"
+    fi
+
+    for agent in $AGENTS; do
+        INBOX_COUNT=$(count_files "$BRIDGE_ROOT/inbox/$agent")
+        if [ "$INBOX_COUNT" -gt 0 ]; then
+            printf "  %-20s " "$agent:"
+            print_color "$GREEN" "$INBOX_COUNT unread"
+        else
+            printf "  %-20s %s\n" "$agent:" "0"
+        fi
+    done
+    echo ""
+
+    # === Recent Activity ===
+    print_color "$BOLD$YELLOW" "━━━ RECENT ACTIVITY (Last 5 messages) ━━━"
+    echo ""
+
+    # Combine all recent messages across all inboxes
+    RECENT_FILES=$(find "$BRIDGE_ROOT/inbox" -type f -name "*.md" 2>/dev/null | xargs ls -lt 2>/dev/null | head -n 5)
+
+    if [ -n "$RECENT_FILES" ]; then
+        echo "$RECENT_FILES" | while read -r line; do
+            FILEPATH=$(echo "$line" | awk '{print $9}')
+            TIMESTAMP=$(echo "$line" | awk '{print $6, $7, $8}')
+            BASENAME=$(basename "$FILEPATH")
+            RECIPIENT=$(basename "$(dirname "$FILEPATH")")
+
+            TITLE=$(get_message_title "$FILEPATH")
+            PRIORITY=$(get_message_priority "$FILEPATH")
+
+            # Truncate title if too long
+            if [ ${#TITLE} -gt 40 ]; then
+                TITLE="${TITLE:0:37}..."
+            fi
+
+            printf "  "
+            colorize_priority "$PRIORITY"
+            printf " → %-10s %s\n" "$RECIPIENT" "$TITLE"
+        done
+    else
+        print_color "$CYAN" "  No recent messages"
+    fi
+    echo ""
+
+    # === Pending Queue Details ===
+    if [ "$PENDING_COUNT" -gt 0 ]; then
+        print_color "$BOLD$YELLOW" "━━━ PENDING QUEUE DETAILS ━━━"
+        echo ""
+
+        find "$BRIDGE_ROOT/queue/pending" -type f -name "*.md" 2>/dev/null | while read -r file; do
+            TITLE=$(get_message_title "$file")
+            PRIORITY=$(get_message_priority "$file")
+            BASENAME=$(basename "$file")
+
+            # Extract recipient from filename (format: NNN-timestamp-sender-recipient-*.md)
+            RECIPIENT=$(echo "$BASENAME" | cut -d'-' -f4)
+
+            printf "  "
+            colorize_priority "$PRIORITY"
+            printf " → %-10s %s\n" "$RECIPIENT" "$TITLE"
+        done
+        echo ""
+    fi
+
+    # === LaunchAgent Status ===
+    print_color "$BOLD$YELLOW" "━━━ LAUNCHAGENT STATUS ━━━"
+    echo ""
+
+    # Check if queue processor is running
+    QUEUE_PROCESSOR_STATUS=$(launchctl list | grep "devvyn.*queue.*processor" || echo "")
+    if [ -n "$QUEUE_PROCESSOR_STATUS" ]; then
+        print_color "$GREEN" "  ✓ Queue Processor: Running"
+    else
+        print_color "$RED" "  ✗ Queue Processor: Not running"
+    fi
+
+    # Check if unanswered monitor is running
+    UNANSWERED_MONITOR_STATUS=$(launchctl list | grep "devvyn.*unanswered" || echo "")
+    if [ -n "$UNANSWERED_MONITOR_STATUS" ]; then
+        print_color "$GREEN" "  ✓ Unanswered Monitor: Running"
+    else
+        print_color "$YELLOW" "  ⚠ Unanswered Monitor: Not running"
+    fi
+
+    echo ""
+
+    # === Quick Actions ===
+    print_color "$BOLD$CYAN" "━━━ QUICK ACTIONS ━━━"
+    echo ""
+    echo "  Compose message:    ~/infrastructure/agent-bridge/workspace/scripts/compose-message.sh"
+    echo "  Check messages:     ~/devvyn-meta-project/scripts/bridge-receive.sh <agent>"
+    echo "  Process queue:      ~/devvyn-meta-project/scripts/bridge-process-queue.sh"
+    echo "  Health check:       ~/infrastructure/agent-bridge/workspace/scripts/health-check.sh"
+    echo ""
+}
+
+main "$@"

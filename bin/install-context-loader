@@ -1,0 +1,63 @@
+#!/bin/bash
+# install-context-loader - Install project context auto-loader into zsh
+
+set -euo pipefail
+
+CONFIG_FILE="${HOME}/.config/claude-context-loader.sh"
+ZSHRC="${HOME}/.zshrc"
+
+# Colors
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+echo -e "${BLUE}Installing Project Context Auto-Loader${NC}"
+echo ""
+
+# Check if config file exists
+if [[ ! -f "$CONFIG_FILE" ]]; then
+    echo -e "${YELLOW}Error: Config file not found: $CONFIG_FILE${NC}"
+    exit 1
+fi
+
+# Check if already installed
+if /usr/bin/grep -q "claude-context-loader.sh" "$ZSHRC" 2>/dev/null; then
+    echo -e "${YELLOW}Context loader already installed in .zshrc${NC}"
+    echo ""
+    echo -ne "Reinstall? (y/N): "
+    read -r response
+
+    if [[ ! "$response" =~ ^[Yy]$ ]]; then
+        echo -e "${GREEN}Skipping installation${NC}"
+        exit 0
+    fi
+
+    # Remove old installation
+    /usr/bin/grep -v "claude-context-loader.sh" "$ZSHRC" > "${ZSHRC}.tmp"
+    mv "${ZSHRC}.tmp" "$ZSHRC"
+fi
+
+# Add to .zshrc
+cat >> "$ZSHRC" <<'EOF'
+
+# Claude Code Context Auto-Loader
+# Automatically shows project context when entering directories
+if [[ -f "${HOME}/.config/claude-context-loader.sh" ]]; then
+    source "${HOME}/.config/claude-context-loader.sh"
+fi
+EOF
+
+echo -e "${GREEN}✓ Installed to .zshrc${NC}"
+echo ""
+echo -e "${BLUE}To activate in current shell:${NC}"
+echo -e "  source ~/.zshrc"
+echo ""
+echo -e "${BLUE}Features enabled:${NC}"
+echo -e "  • Auto-show context on 'cd' into project directories"
+echo -e "  • 'pctx' command for full project context"
+echo -e "  • Git status, branch, and last commit info"
+echo -e "  • CLAUDE.md detection and summary"
+echo -e "  • Bridge message notifications"
+echo ""
+echo -e "${GREEN}Installation complete!${NC}"

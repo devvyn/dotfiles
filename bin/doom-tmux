@@ -1,0 +1,27 @@
+#!/bin/bash
+# Doom + tmux project launcher
+
+SESSION="doom"
+PROJECT_DIR="${1:-$PWD}"
+PROJECT_NAME=$(basename "$PROJECT_DIR")
+
+# Create or attach to session
+if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+    tmux new-session -d -s "$SESSION" -c "$PROJECT_DIR"
+    
+    # Window 1: Emacs
+    tmux rename-window -t "$SESSION:1" 'emacs'
+    tmux send-keys -t "$SESSION:1" 'emacs -nw' C-m
+    
+    # Window 2: Shell
+    tmux new-window -t "$SESSION:2" -n 'shell' -c "$PROJECT_DIR"
+    
+    # Window 3: Git
+    tmux new-window -t "$SESSION:3" -n 'git' -c "$PROJECT_DIR"
+    tmux send-keys -t "$SESSION:3" 'tig' C-m
+    
+    # Back to Emacs
+    tmux select-window -t "$SESSION:1"
+fi
+
+tmux attach -t "$SESSION"

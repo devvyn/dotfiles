@@ -1,0 +1,208 @@
+#!/bin/bash
+# Reply To - Compose reply to existing message with In-Reply-To header
+# Auto-populates reply metadata from original message
+
+set -euo pipefail
+
+BRIDGE_ROOT="/Users/devvynmurphy/infrastructure/agent-bridge/bridge"
+WORKSPACE_ROOT="/Users/devvynmurphy/infrastructure/agent-bridge/workspace"
+DRAFTS_DIR="$WORKSPACE_ROOT/drafts"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+print_color() {
+    local color=$1
+    shift
+    echo -e "${color}$*${NC}"
+}
+
+# Extract message metadata
+get_message_id() {
+    local file=$1
+    grep -m 1 '^\*\*Message-ID\*\*:' "$file" 2>/dev/null | sed 's/\*\*Message-ID\*\*:[[:space:]]*//' || echo ""
+}
+
+get_from() {
+    local file=$1
+    grep -m 1 '^\*\*From\*\*:' "$file" 2>/dev/null | sed 's/\*\*From\*\*:[[:space:]]*//' || echo "unknown"
+}
+
+get_to() {
+    local file=$1
+    grep -m 1 '^\*\*To\*\*:' "$file" 2>/dev/null | sed 's/\*\*To\*\*:[[:space:]]*//' || echo "unknown"
+}
+
+get_title() {
+    local file=$1
+    head -n 1 "$file" | sed 's/^# \[PRIORITY: [A-Z]*\] //' | sed 's/^# //'
+}
+
+get_priority() {
+    local file=$1
+    head -n 1 "$file" | grep -o 'PRIORITY: [A-Z]*' | sed 's/PRIORITY: //' || echo "NORMAL"
+}
+
+# Find message file
+find_message() {
+    local search=$1
+
+    # Try direct path first
+    if [ -f "$search" ]; then
+        echo "$search"
+        return 0
+    fi
+
+    # Search in bridge
+    local found=$(find "$BRIDGE_ROOT" -type f -name "*.md" \( -exec grep -l "Message-ID.*$search" {} \; -o -name "*$search*" \) 2>/dev/null | head -n 1)
+
+    if [ -n "$found" ]; then
+        echo "$found"
+        return 0
+    fi
+
+    return 1
+}
+
+# Create reply draft
+create_reply() {
+    local original_file=$1
+    local reply_from=$2
+
+    # Extract original message details
+    local original_msg_id=$(get_message_id "$original_file")
+    local original_from=$(get_from "$original_file")
+    local original_to=$(get_to "$original_file")
+    local original_title=$(get_title "$original_file")
+    local original_priority=$(get_priority "$original_file")
+
+    # Determine reply recipient (original sender)
+    local reply_to="$original_from"
+
+    # Determine reply title
+    local reply_title="$original_title"
+    if [[ ! "$reply_title" =~ ^Re: ]]; then
+        reply_title="Re: $reply_title"
+    fi
+
+    # Create draft file
+    local timestamp=$(date +%Y%m%d_%H%M%S)
+    local draft_filename="${timestamp}-${reply_from}-to-${reply_to}-reply.md"
+    local draft_path="$DRAFTS_DIR/$reply_from/$draft_filename"
+
+    # Ensure drafts directory exists
+    mkdir -p "$DRAFTS_DIR/$reply_from"
+
+    # Create draft with reply metadata
+    cat > "$draft_path" <<EOF
+# [PRIORITY: $original_priority] $reply_title
+
+**From**: $reply_from
+**To**: $reply_to
+**Timestamp**: $(date -Iseconds)
+**In-Reply-To**: $original_msg_id
+
+## Context
+
+Replying to message from $original_from regarding: $original_title
+
+## Content
+
+[Your reply here]
+
+## Expected Action
+
+[What should the recipient do with this reply?]
+
+---
+
+### Original Message
+
+$(cat "$original_file")
+EOF
+
+    echo "$draft_path"
+}
+
+usage() {
+    echo "Usage: $0 <message_id_or_file> <reply_from_agent>"
+    echo ""
+    echo "Arguments:"
+    echo "  message_id_or_file:  Path to message file, message ID, or search term"
+    echo "  reply_from_agent:    Agent sending the reply (code, chat, etc.)"
+    echo ""
+    echo "Examples:"
+    echo "  $0 2025-10-09T06:35:00 code"
+    echo "  $0 ~/infrastructure/agent-bridge/bridge/inbox/code/message.md code"
+    echo "  $0 'Framework Update' code"
+    exit 1
+}
+
+main() {
+    if [ $# -ne 2 ]; then
+        usage
+    fi
+
+    local message_ref=$1
+    local reply_from=$2
+
+    print_color "$GREEN" "=== Reply Composer ==="
+    echo ""
+
+    # Find the original message
+    print_color "$YELLOW" "Searching for message: $message_ref"
+
+    local original_file=$(find_message "$message_ref")
+
+    if [ -z "$original_file" ] || [ ! -f "$original_file" ]; then
+        print_color "$RED" "Error: Message not found: $message_ref"
+        echo ""
+        print_color "$YELLOW" "Search locations:"
+        echo "  - Bridge inbox/outbox/archive"
+        echo "  - Direct file path"
+        echo "  - Message ID"
+        exit 1
+    fi
+
+    print_color "$GREEN" "✓ Found message: $(basename "$original_file")"
+    echo ""
+
+    # Display original message details
+    local orig_from=$(get_from "$original_file")
+    local orig_title=$(get_title "$original_file")
+    local orig_msg_id=$(get_message_id "$original_file")
+
+    print_color "$BLUE" "Original message details:"
+    echo "  From:       $orig_from"
+    echo "  Title:      $orig_title"
+    echo "  Message-ID: ${orig_msg_id:0:40}..."
+    echo ""
+
+    # Create reply draft
+    print_color "$YELLOW" "Creating reply draft..."
+
+    local draft_path=$(create_reply "$original_file" "$reply_from")
+
+    print_color "$GREEN" "✓ Reply draft created: $draft_path"
+    echo ""
+
+    # Open in editor
+    read -p "$(print_color "$BLUE" "Open in editor? (Y/n): ")" OPEN_EDITOR
+    OPEN_EDITOR=${OPEN_EDITOR:-Y}
+
+    if [[ "$OPEN_EDITOR" =~ ^[Yy] ]]; then
+        ${EDITOR:-vim} "$draft_path"
+    fi
+
+    echo ""
+    print_color "$YELLOW" "Draft saved. Send with:"
+    echo "  $WORKSPACE_ROOT/scripts/send-draft.sh $draft_path"
+    echo ""
+    print_color "$GREEN" "Done!"
+}
+
+main "$@"

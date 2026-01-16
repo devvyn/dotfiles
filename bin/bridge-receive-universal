@@ -1,0 +1,70 @@
+#!/bin/bash
+# Bridge Receive Universal - Environment-Aware Wrapper
+# Works in both containerized (jailed) and host (local) environments
+
+set -euo pipefail
+
+# Detect environment
+detect_environment() {
+    if [ -f "/.dockerenv" ]; then
+        echo "container"
+    else
+        echo "host"
+    fi
+}
+
+# Usage
+usage() {
+    echo "Usage: $0 <agent> [message_id]"
+    echo ""
+    echo "Arguments:"
+    echo "  agent:      Agent namespace (chat, code, investigator, human, etc.)"
+    echo "  message_id: Optional specific message ID to process"
+    echo ""
+    echo "Behavior:"
+    echo "  - Without message_id: Process next available message for agent"
+    echo "  - With message_id: Process specific message if addressed to agent"
+    echo ""
+    echo "Environment: Auto-detects container vs host and routes appropriately"
+    exit 1
+}
+
+# Check arguments
+if [ $# -lt 1 ]; then
+    usage
+fi
+
+ENV=$(detect_environment)
+BRIDGE_SCRIPT="/Users/devvynmurphy/devvyn-meta-project/scripts/bridge-receive.sh"
+
+# Build command
+AGENT="$1"
+MESSAGE_ID="${2:-}"
+
+if [ "$ENV" = "container" ]; then
+    echo "[bridge-receive-universal] Detected container environment, using osascript bridge"
+
+    # Build command string for osascript
+    if [ -n "$MESSAGE_ID" ]; then
+        CMD="cd ~/devvyn-meta-project && ./scripts/bridge-receive.sh \"$AGENT\" \"$MESSAGE_ID\""
+    else
+        CMD="cd ~/devvyn-meta-project && ./scripts/bridge-receive.sh \"$AGENT\""
+    fi
+
+    # Execute via osascript and capture output
+    osascript -e "do shell script \"$CMD\""
+    EXIT_CODE=$?
+
+else
+    echo "[bridge-receive-universal] Detected host environment, direct execution"
+
+    # Direct execution on host
+    if [ -n "$MESSAGE_ID" ]; then
+        "$BRIDGE_SCRIPT" "$AGENT" "$MESSAGE_ID"
+    else
+        "$BRIDGE_SCRIPT" "$AGENT"
+    fi
+    EXIT_CODE=$?
+fi
+
+exit $EXIT_CODE

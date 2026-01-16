@@ -1,0 +1,80 @@
+#!/bin/bash
+# Bridge Send Universal - Environment-Aware Wrapper
+# Works in both containerized (jailed) and host (local) environments
+
+set -euo pipefail
+
+# Detect environment
+detect_environment() {
+    if [ -f "/.dockerenv" ]; then
+        echo "container"
+    else
+        echo "host"
+    fi
+}
+
+# Usage
+usage() {
+    echo "Usage: $0 <sender> <recipient> <priority> <title> [content_file]"
+    echo ""
+    echo "Arguments:"
+    echo "  sender:     Agent namespace (chat, code, investigator, human, etc.)"
+    echo "  recipient:  Target agent namespace"
+    echo "  priority:   CRITICAL|HIGH|NORMAL|INFO"
+    echo "  title:      Message title"
+    echo "  content_file: Optional file containing message content"
+    echo ""
+    echo "Environment: Auto-detects container vs host and routes appropriately"
+    echo "- In container: Uses osascript bridge to execute on host"
+    echo "- On host: Direct execution"
+    exit 1
+}
+
+# Check arguments
+if [ $# -lt 4 ]; then
+    usage
+fi
+
+ENV=$(detect_environment)
+BRIDGE_SCRIPT="/Users/devvynmurphy/devvyn-meta-project/scripts/bridge-send.sh"
+
+# Build command with proper quoting
+SENDER="$1"
+RECIPIENT="$2"
+PRIORITY="$3"
+TITLE="$4"
+CONTENT_FILE="${5:-}"
+
+if [ "$ENV" = "container" ]; then
+    echo "[bridge-send-universal] Detected container environment, using osascript bridge"
+
+    # Build command string for osascript
+    if [ -n "$CONTENT_FILE" ]; then
+        CMD="cd ~/devvyn-meta-project && ./scripts/bridge-send.sh \"$SENDER\" \"$RECIPIENT\" \"$PRIORITY\" \"$TITLE\" \"$CONTENT_FILE\""
+    else
+        CMD="cd ~/devvyn-meta-project && ./scripts/bridge-send.sh \"$SENDER\" \"$RECIPIENT\" \"$PRIORITY\" \"$TITLE\""
+    fi
+
+    # Execute via osascript
+    osascript -e "do shell script \"$CMD\""
+    EXIT_CODE=$?
+
+else
+    echo "[bridge-send-universal] Detected host environment, direct execution"
+
+    # Direct execution on host
+    if [ -n "$CONTENT_FILE" ]; then
+        "$BRIDGE_SCRIPT" "$SENDER" "$RECIPIENT" "$PRIORITY" "$TITLE" "$CONTENT_FILE"
+    else
+        "$BRIDGE_SCRIPT" "$SENDER" "$RECIPIENT" "$PRIORITY" "$TITLE"
+    fi
+    EXIT_CODE=$?
+fi
+
+if [ $EXIT_CODE -eq 0 ]; then
+    echo "[bridge-send-universal] Message sent successfully"
+else
+    echo "[bridge-send-universal] ERROR: Message send failed with code $EXIT_CODE" >&2
+fi
+
+exit $EXIT_CODE

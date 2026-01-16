@@ -1,0 +1,240 @@
+#!/bin/bash
+# voice-note - Quick voice-to-text knowledge capture
+# Integrates with devvyn-meta-project knowledge base
+
+set -euo pipefail
+
+# Configuration
+KB_ROOT="${HOME}/devvyn-meta-project/knowledge-base"
+NOTES_DIR="${KB_ROOT}/notes"
+TEMP_DIR="/tmp/voice-note"
+
+# Colors
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+mkdir -p "$NOTES_DIR" "$TEMP_DIR"
+
+usage() {
+    cat <<EOF
+${BLUE}voice-note${NC} - Voice-to-Text Knowledge Capture
+
+Usage:
+  voice-note [topic]                Quick note about topic
+  voice-note --category <cat>       Note in specific category
+  voice-note --list                 List recent notes
+  voice-note --search <term>        Search notes
+
+Categories:
+  decisions   - Strategic decisions and rationale
+  patterns    - Discovered patterns and approaches
+  ideas       - Ideas and future possibilities
+  notes       - General notes (default)
+  learning    - Learning and insights
+  questions   - Questions to investigate
+
+Examples:
+  voice-note "bridge system improvement"
+  voice-note --category ideas
+  voice-note --list
+  voice-note --search "voice recognition"
+
+${GREEN}Tip: Use Fn-Fn for voice dictation${NC}
+
+EOF
+    exit 0
+}
+
+list_notes() {
+    echo -e "${BLUE}═══════════════════════════════════════════════${NC}"
+    echo -e "${BLUE}   Recent Voice Notes${NC}"
+    echo -e "${BLUE}═══════════════════════════════════════════════${NC}"
+    echo ""
+
+    local count=0
+    # Find all note files, sort by modification time, show last 10
+    fd -t f ".*\.md" "$NOTES_DIR" -x ls -lt {} \; 2>/dev/null | head -10 | while read -r line; do
+        local file=$(echo "$line" | awk '{print $NF}')
+        if [[ -f "$file" ]]; then
+            local basename=$(basename "$file")
+            local timestamp=$(echo "$basename" | /usr/bin/grep -oE "[0-9]{8}-[0-9]{6}" || echo "unknown")
+            local category=$(dirname "$file" | xargs basename)
+
+            echo -e "${GREEN}[$category]${NC} $timestamp"
+            echo -n "  "
+            head -1 "$file" | sed 's/^# //'
+            echo ""
+
+            count=$((count + 1))
+        fi
+    done
+
+    if [[ $count -eq 0 ]]; then
+        echo -e "${YELLOW}No notes found yet. Create your first with: voice-note${NC}"
+    fi
+
+    echo ""
+}
+
+search_notes() {
+    local term="$1"
+
+    echo -e "${BLUE}Searching for: '${term}'${NC}"
+    echo ""
+
+    if command -v rg >/dev/null 2>&1; then
+        rg -i --heading --color always -C 2 "$term" "$NOTES_DIR" || echo -e "${YELLOW}No results found${NC}"
+    else
+        /usr/bin/grep -ri --color=always -C 2 "$term" "$NOTES_DIR" || echo -e "${YELLOW}No results found${NC}"
+    fi
+}
+
+create_note() {
+    local topic="${1:-}"
+    local category="${2:-notes}"
+
+    # Validate category
+    case "$category" in
+        decisions|patterns|ideas|notes|learning|questions)
+            ;;
+        *)
+            echo -e "${YELLOW}Unknown category '$category', using 'notes'${NC}"
+            category="notes"
+            ;;
+    esac
+
+    local cat_dir="$NOTES_DIR/$category"
+    mkdir -p "$cat_dir"
+
+    echo -e "${BLUE}═══════════════════════════════════════════════${NC}"
+    echo -e "${BLUE}   Voice Note Capture${NC}"
+    echo -e "${BLUE}═══════════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "Category: ${CYAN}${category}${NC}"
+
+    # Get topic if not provided
+    if [[ -z "$topic" ]]; then
+        echo ""
+        echo -e "${GREEN}Tip: Use voice dictation (Fn-Fn) to speak your topic${NC}"
+        echo -ne "${BLUE}Topic/Title:${NC} "
+        read -r topic
+
+        if [[ -z "$topic" ]]; then
+            echo -e "${YELLOW}No topic provided. Exiting.${NC}"
+            exit 1
+        fi
+    fi
+
+    # Create filename from topic and timestamp
+    local timestamp=$(date +%Y%m%d-%H%M%S)
+    local filename_base=$(echo "$topic" | tr '[:upper:]' '[:lower:]' | tr -cs '[:alnum:]' '-' | cut -c1-40)
+    local filename="${cat_dir}/${timestamp}-${filename_base}.md"
+
+    echo ""
+    echo -e "${BLUE}Content:${NC}"
+    echo -e "${GREEN}(Type or use voice dictation. Type END on a new line when done)${NC}"
+    echo ""
+
+    # Capture content
+    local temp_content="$TEMP_DIR/note-content-$$.md"
+
+    {
+        while IFS= read -r line; do
+            if [[ "$line" == "END" ]]; then
+                break
+            fi
+            echo "$line"
+        done
+    } > "$temp_content"
+
+    # Check if content was provided
+    if [[ ! -s "$temp_content" ]]; then
+        echo -e "${YELLOW}No content provided. Exiting.${NC}"
+        rm -f "$temp_content"
+        exit 1
+    fi
+
+    # Create the note with frontmatter
+    {
+        echo "# $topic"
+        echo ""
+        echo "**Category**: $category"
+        echo "**Date**: $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "**Captured via**: voice-note"
+        echo ""
+        echo "---"
+        echo ""
+        cat "$temp_content"
+        echo ""
+        echo "---"
+        echo ""
+        echo "## Related"
+        echo ""
+        echo "- [ ] Review and expand"
+        echo "- [ ] Cross-link to related notes"
+        echo "- [ ] Consider actionable next steps"
+    } > "$filename"
+
+    rm -f "$temp_content"
+
+    # Show preview
+    echo ""
+    echo -e "${BLUE}─────────────────────────────────────────────${NC}"
+    echo -e "${GREEN}Note created:${NC} ${filename}"
+    echo -e "${BLUE}─────────────────────────────────────────────${NC}"
+    echo ""
+    echo -e "${CYAN}Preview:${NC}"
+    head -20 "$filename"
+    echo ""
+
+    # Provide audio feedback
+    command -v say >/dev/null 2>&1 && say "Note saved" &
+
+    # Offer to open in editor
+    echo -ne "${BLUE}Open in editor? (y/N):${NC} "
+    read -r open_editor
+
+    if [[ "$open_editor" =~ ^[Yy]$ ]]; then
+        if [[ -n "${EDITOR:-}" ]]; then
+            $EDITOR "$filename"
+        else
+            open "$filename"
+        fi
+    fi
+
+    echo ""
+    echo -e "${GREEN}✓ Note saved to knowledge base${NC}"
+    echo -e "  Category: ${category}"
+    echo -e "  File: $(basename "$filename")"
+}
+
+# Main command dispatcher
+case "${1:-}" in
+    --list|-l)
+        list_notes
+        ;;
+    --search|-s)
+        if [[ -z "${2:-}" ]]; then
+            echo -e "${YELLOW}Error: --search requires a search term${NC}"
+            exit 1
+        fi
+        search_notes "$2"
+        ;;
+    --category|-c)
+        if [[ -z "${2:-}" ]]; then
+            echo -e "${YELLOW}Error: --category requires a category name${NC}"
+            exit 1
+        fi
+        create_note "${3:-}" "$2"
+        ;;
+    --help|-h|help)
+        usage
+        ;;
+    *)
+        # Default: create a note with optional topic
+        create_note "${1:-}"
+        ;;
+esac

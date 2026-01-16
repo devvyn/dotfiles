@@ -1,0 +1,32 @@
+#!/bin/bash
+# Thread View - Convenient wrapper for viewing conversation threads
+# Displays full conversation chain for a given message
+
+set -euo pipefail
+
+SCRIPT_DIR="$(dirname "$0")"
+CONVERSATION_VIEW="$SCRIPT_DIR/conversation-view.sh"
+
+usage() {
+    echo "Usage: $0 <message_id_or_search_term>"
+    echo ""
+    echo "View the full conversation thread for a message"
+    echo ""
+    echo "Arguments:"
+    echo "  message_id_or_search_term  Message ID or part of title to search"
+    echo ""
+    echo "Examples:"
+    echo "  $0 2025-10-09T06:35:00"
+    echo "  $0 'Framework Update'"
+    echo ""
+    echo "To view all threads:"
+    echo "  $CONVERSATION_VIEW --all"
+    exit 1
+}
+
+if [ $# -eq 0 ]; then
+    usage
+fi
+
+# Pass through to conversation-view.sh
+exec "$CONVERSATION_VIEW" "$@"

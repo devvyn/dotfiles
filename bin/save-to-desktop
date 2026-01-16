@@ -1,0 +1,145 @@
+#!/bin/bash
+# save-to-desktop - Format and save content to Desktop with ISO timestamp
+# Follows user preference for >24 line content delivery
+
+set -euo pipefail
+
+# Configuration
+DESKTOP="${HOME}/Desktop"
+
+# Colors
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+usage() {
+    cat <<EOF
+${BLUE}save-to-desktop${NC} - Save content to Desktop with ISO timestamp
+
+Usage:
+  save-to-desktop <description> [content_file]
+  cat content.md | save-to-desktop <description>
+  save-to-desktop <description> <<< "content here"
+
+Arguments:
+  description     Short description for filename (will be slugified)
+  content_file    Optional file to read from (otherwise reads stdin)
+
+File Format:
+  YYYYMMDDHHMMSS-TIMEZONE-description.md
+  Example: 20251005143000-0600-logging-review.md
+
+Options:
+  --open          Open in default app (Marked 2) after saving
+  --preview       Show first 20 lines before saving
+
+Examples:
+  save-to-desktop "API analysis" report.md
+  echo "# Notes" | save-to-desktop "meeting-notes"
+  save-to-desktop --open "system design" design.md
+
+EOF
+    exit 0
+}
+
+# Parse options
+OPEN_AFTER=false
+PREVIEW=false
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --open|-o)
+            OPEN_AFTER=true
+            shift
+            ;;
+        --preview|-p)
+            PREVIEW=true
+            shift
+            ;;
+        --help|-h)
+            usage
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
+# Get description
+DESCRIPTION="${1:-}"
+
+if [[ -z "$DESCRIPTION" ]]; then
+    echo -e "${YELLOW}Error: Description required${NC}"
+    usage
+fi
+
+# Slugify description (make it filename-safe)
+SLUG=$(echo "$DESCRIPTION" | tr '[:upper:]' '[:lower:]' | tr -cs '[:alnum:]' '-' | sed 's/-$//' | cut -c1-40)
+
+# Create timestamp with timezone
+TIMESTAMP=$(date '+%Y%m%d%H%M%S')
+TIMEZONE=$(date '+%z')
+
+# Build filename
+FILENAME="${TIMESTAMP}-${TIMEZONE}-${SLUG}.md"
+FILEPATH="${DESKTOP}/${FILENAME}"
+
+# Get content
+TEMP_CONTENT="/tmp/save-to-desktop-$$.md"
+
+if [[ -n "${2:-}" ]]; then
+    # Content from file
+    if [[ ! -f "$2" ]]; then
+        echo -e "${YELLOW}Error: File not found: $2${NC}"
+        exit 1
+    fi
+    cp "$2" "$TEMP_CONTENT"
+else
+    # Content from stdin
+    cat > "$TEMP_CONTENT"
+fi
+
+# Check if content exists
+if [[ ! -s "$TEMP_CONTENT" ]]; then
+    echo -e "${YELLOW}Error: No content provided${NC}"
+    rm -f "$TEMP_CONTENT"
+    exit 1
+fi
+
+# Preview if requested
+if [[ "$PREVIEW" == true ]]; then
+    echo -e "${BLUE}Preview (first 20 lines):${NC}"
+    echo -e "${BLUE}─────────────────────────────────────────────${NC}"
+    head -20 "$TEMP_CONTENT"
+    echo -e "${BLUE}─────────────────────────────────────────────${NC}"
+    echo ""
+    echo -ne "${YELLOW}Continue saving? (y/N):${NC} "
+    read -r confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        echo -e "${YELLOW}Cancelled${NC}"
+        rm -f "$TEMP_CONTENT"
+        exit 0
+    fi
+fi
+
+# Save to Desktop
+cp "$TEMP_CONTENT" "$FILEPATH"
+rm -f "$TEMP_CONTENT"
+
+# Report success
+echo -e "${GREEN}✓ Saved to Desktop${NC}"
+echo -e "  File: ${FILENAME}"
+echo -e "  Path: ${FILEPATH}"
+
+# Get line count
+LINE_COUNT=$(wc -l < "$FILEPATH" | tr -d ' ')
+echo -e "  Lines: ${LINE_COUNT}"
+
+# Open if requested
+if [[ "$OPEN_AFTER" == true ]]; then
+    echo -e "${BLUE}Opening in default app...${NC}"
+    open "$FILEPATH"
+fi
+
+echo ""
